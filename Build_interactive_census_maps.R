@@ -287,6 +287,11 @@ state_salaries_merged$percent_affordable[
         state_affordability$percent_affordable[
             state_affordability$area_title==state_full]
 
+# Remove County codes
+state_salaries_merged<-select(state_salaries_merged,-county_code) %>%
+    filter(!is.na(area_title)) %>%
+    arrange(percent_affordable)
+
 # save output as raw csv
 write_csv(state_salaries_merged, paste0(state_abb,"_affordability_by_county.csv"))
 
@@ -306,8 +311,12 @@ colnames(excel_file) <- sapply(cn, simpleCap)
 # Write output as clean excel
 WriteXLS::WriteXLS(excel_file, 
                    paste0(state_abb,"_affordability_by_county.xls"),
+                   row.names = FALSE,
+                   AdjWidth = TRUE,
+                   AutoFilter = FALSE,
+                   BoldHeaderRow = TRUE,
                    FreezeRow = 1,
-                   BoldHeaderRow = T)
+                   verbose = TRUE)
 
 ################################################
 ## HTML Examples Table ##
