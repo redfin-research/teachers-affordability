@@ -139,25 +139,31 @@ get_active_listings <- function(state_abb = "CA") {
         )
 }
         q <- paste0("select listing_id, 
-                    county_id, 
+                    l.county_id, 
+                    c.display_name,
                     coalesce(list_price, original_price) as list_price, 
                     hoa_dues, 
+                    t.taxes_due_properties/t.taxable_value_total_properties as prop_tax_rate,
                     pt.name,
                     num_bedrooms, 
                     num_bathrooms, 
                     approx_sq_ft,
                     'http://www.redfin.com/'::text || upper(l.state_code)::text || '/'::text || regexp_replace(initcap(trim(l.city)), ' ', '-')::text || '/home/'::text || l.property_id::text as url
                     from listings l
+                    join rf_temp.dqv3_tax t on t.property_id=l.property_id
+                    join counties c on c.county_id=l.county_id
                     join property_types pt on pt.property_type_id=l.property_type_id
                     where listing_type_id = 1
                     and search_status_id = 1
-                    AND is_short_sale = 0
-                    AND is_bank_owned = 0
+                    and is_short_sale = 0
+                    and is_bank_owned = 0
                     and l.property_type_id in (3,6,13)
+                    and t.taxes_due_properties is not null
+                    and t.taxable_value_total_properties is not null
                     and coalesce(listing_date::date, listing_added_date::date) <= current_date-1
                     and coalesce(listing_date::date, listing_added_date::date) > current_date-366
                     and coalesce(off_market_date, sale_date) is null
-                    and county_id is not null
+                    and l.county_id is not null
                     and coalesce(list_price, original_price) >= 10000
                     and state_code = '",state_abb,"'
                     order by list_price desc;"
@@ -165,16 +171,6 @@ get_active_listings <- function(state_abb = "CA") {
         message(paste0("Getting listings for ",state_abb))
         
         listings <- dbGetQuery(rscon, statement = q)
-        
-        # Gather county property tax rates
-        q2 <- paste0("select c.county_id, c.display_name, t.rate as prop_tax_rate
-                     from county_property_tax_rates t
-                     join counties c on c.county_id=t.county_id
-                     join states s on s.state_id=c.state_id
-                     where s.state_code = '",state_abb,"';")
-        county_tax_rates <- dbGetQuery(srcon, statement = q2)
-       
-        listings <- merge(listings, county_tax_rates, by.x="county_id", by.y="county_id", all.x = T)
         
         return(listings)
 }
@@ -309,7 +305,7 @@ cn <- gsub("_", " ", colnames(excel_file))
 colnames(excel_file) <- sapply(cn, simpleCap)
 
 # Write output as clean excel
-WriteXLS::WriteXLS(excel_file, 
+WriteXLS::WriteXLS(excel_file,
                    paste0(state_abb,"_affordability_by_county.xls"),
                    row.names = FALSE,
                    AdjWidth = TRUE,
