@@ -80,9 +80,9 @@ state_filter <- function(state_abb = "CA") {
     
     # Calculated weighted mean for salary & Subset for state
     state_salaries <- salaries %>%
-        group_by(area, area_title) %>%
+        dplyr::group_by(area, area_title) %>%
         summarise(teacher_salary = weighted.mean(a_median, tot_emp, na.rm = T)) %>%
-        filter(grepl(paste0(state_abb,"|", state_full," nonmetropolitan"), area_title, ignore.case = F))
+        dplyr::filter(grepl(paste0(state_abb,"|", state_full," nonmetropolitan"), area_title, ignore.case = F))
     
     state_median_salary <- salaries %>%
         filter(grepl(paste0(state_abb,"|", state_full," nonmetropolitan"), area_title, ignore.case = F)) %>%
@@ -91,7 +91,7 @@ state_filter <- function(state_abb = "CA") {
     
     bls_area_def <- bls_area_def %>% 
         filter(state == state_full) %>% 
-        select(-township_code, -msa_code_for_msas_with_divisions, -msa_name_for_msas_with_divisions)
+        dplyr::select(-township_code, -msa_code_for_msas_with_divisions, -msa_name_for_msas_with_divisions)
 
     state_salaries_merged <- merge(state_salaries, bls_area_def, by.x = "area", by.y = "msa_code_(including_msa_divisions)", all.y = T)
     
@@ -113,12 +113,12 @@ rm(bls_area_def)
 interest_rate = 0.035
 
 # Calculate max monthly payment and max home price 
-# using 40 percent affordability criteria
+# using 30 percent affordability criteria
 state_salaries_merged <- state_salaries_merged %>%
-    select(area_title, county_name, county_code, teacher_salary) %>%
-    mutate(max_payment = round((teacher_salary / 12) * 0.4 / 25) * 25, 
+    dplyr::select(area_title, county_name, county_code, teacher_salary) %>%
+    mutate(max_payment = round((teacher_salary / 12) * 0.3 / 25) * 25, 
            max_home_price = round(
-               ((teacher_salary / 12) * 0.4 - 500) /
+               ((teacher_salary / 12) * 0.3 - 500) /
                     ( (interest_rate/12) + (interest_rate/12) /
                         (
                           (1 + (interest_rate/12))^(30*12)
@@ -168,13 +168,13 @@ get_active_listings <- function(state_abb = "CA") {
         
         # Gather county property tax rates
         q2 <- paste0("select c.county_id, c.display_name, t.rate as prop_tax_rate
-        from county_property_tax_rates t
+                     from county_property_tax_rates t
                      join counties c on c.county_id=t.county_id
                      join states s on s.state_id=c.state_id
                      where s.state_code = '",state_abb,"';")
         county_tax_rates <- dbGetQuery(srcon, statement = q2)
        
-        listings <- merge(listings, county_taxe_rates, by.x="county_id", by.y="county_id", all.x = T)
+        listings <- merge(listings, county_tax_rates, by.x="county_id", by.y="county_id", all.x = T)
         
         return(listings)
 }
@@ -287,8 +287,8 @@ state_salaries_merged$percent_affordable[
         state_affordability$percent_affordable[
             state_affordability$area_title==state_full]
 
-# Remove County codes
-state_salaries_merged<-select(state_salaries_merged,-county_code) %>%
+
+state_salaries_merged<- state_salaries_merged %>%
     filter(!is.na(area_title)) %>%
     arrange(percent_affordable)
 
@@ -341,9 +341,43 @@ affordable_listing_examples$description <- paste(
 
 # Create HTML table
 tbl <- affordable_listing_examples %>% 
-    select(display_name, teacher_salary, max_payment, max_home_price, url, description, county_id) %>%
+    dplyr::select(display_name, teacher_salary, max_payment, max_home_price, url, description, county_id) %>%
     filter(!(is.na(display_name))) %>%
     arrange(display_name)
+
+# Segment out unaffordable counties
+unaffordable_counties <- state_salaries_merged[state_salaries_merged$affordable_listings==0 
+                                          & !(is.na(state_salaries_merged$affordable_listings)),]
+
+# Lookup county_ids
+county_ids <- unique(listings[listings$display_name %in% unaffordable_counties$county_name,1:2])
+# Join in county_ids
+unaffordable_counties <- merge(unaffordable_counties,county_ids, by.x="county_name", by.y="display_name", all=T)
+
+for(u in seq_along(unaffordable_counties$county_name)){
+    tbl0<-cbind.data.frame(
+        display_name=as.character(unaffordable_counties$county_name[u]),
+        teacher_salary=unaffordable_counties$teacher_salary[u],
+        max_payment=unaffordable_counties$max_payment[u],
+        max_home_price=unaffordable_counties$max_home_price[u],
+        url=NA,
+        description=as.character("No Affordable Listings"),
+        county_id=unaffordable_counties$county_id[u], 
+        stringsAsFactors = F
+    )
+    
+    tbl0<-group_by(tbl0,display_name)
+    
+    # join to examples table
+    l = list(tbl,tbl0)
+    tbl<-rbindlist(l)
+}
+
+# Order by county name
+tbl<-arrange(tbl,display_name)
+
+# Clean County Name
+tbl$display_name<-str_replace(tbl$display_name, " County","")
 
 # Separate state-level data to add to table
 state_affordable <- state_salaries_merged[state_salaries_merged$area_title==state_full 
@@ -359,10 +393,8 @@ tbl2<-cbind.data.frame(
     county_id=NA, 
     stringsAsFactors = F
     )
-tbl2<-group_by(tbl2,display_name)
 
-# Clean County Name
-tbl$display_name<-str_replace(tbl$display_name, " County","")
+tbl2<-group_by(tbl2,display_name)
 
 # Join state data and county-level examples
 l = list(tbl,tbl2)
@@ -396,7 +428,12 @@ for (i in 1:nrow(tbl)) {
         paste0("<b>",tbl[i, 1, with = FALSE],"</b></td>")
     ),"<td style='text-align: right' class='c1 '>", paste0("$", prettyNum(100*round(tbl[i, 2, with = FALSE]/100), big.mark = ",", scientific = FALSE)), "</td>
                  <td style='text-align: right' class='c2 '>", paste0("$", prettyNum(tbl[i, 4, with = FALSE], big.mark = ",", scientific = FALSE)), "</td>
-                 <td style='text-align: right' class='c3 '><a href=", tbl[i, 5, with = FALSE], "?utm_source=blog&utm_medium=post&utm_content=real_estate&utm_campaign=1002170'>", tbl[i, 6, with = FALSE], "</a></td></tr>")
+                 <td style='text-align: right' class='c3 '>",
+                    ifelse(!is.na(tbl[i, 5, with = FALSE]),
+                           paste0("<a href=", tbl[i, 5, with = FALSE], "?utm_source=blog&utm_medium=post&utm_content=real_estate&utm_campaign=1002170'>", tbl[i, 6, with = FALSE], "</a></td></tr>"),
+                           paste0(tbl[i, 6, with = FALSE], "</td></tr>")
+                           )
+    )
 }
 
 html <- paste0(html, "</tbody></table>")
@@ -413,7 +450,7 @@ write.table(html, paste0(state_abb,"_affordability_by_county.html"), col.names =
 counties <- counties(state = state_abb, cb=TRUE)
 
 # Remove NAs
-state_salaries_merged<-state_salaries_merged[!is.na(state_salaries_merged$teacher_salary),]
+state_salaries_merged<-state_salaries_merged[complete.cases(state_salaries_merged),]
 
 # Geo join for mapping
 state_salaries_geo <- geo_join(counties, state_salaries_merged, "COUNTYFP", "county_code")
