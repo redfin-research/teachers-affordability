@@ -7,7 +7,7 @@ rm(list=ls())
 
 #######################
 # Set state for script
-state_abb <- "CA"
+state_abb <- "WA"
 #######################
 
 # Set up packages
@@ -21,7 +21,8 @@ packagesRequired <- c('tigris',
                       'leaflet',
                       'purrr',
                       'data.table',
-                      'blscrapeR')
+                      'blscrapeR',
+                      'gdata')
 
 packagesMissing <- packagesRequired[!(packagesRequired %in% installed.packages())]
 
@@ -49,23 +50,111 @@ bls_industries <- read_tsv("http://download.bls.gov/pub/time.series/oe/oe.indust
 bls_occupations <- read_tsv("http://download.bls.gov/pub/time.series/oe/oe.occupation")
 bls_datatypes <- read_tsv("http://download.bls.gov/pub/time.series/oe/oe.datatype")
 
-# Load in BLS data (downloaded as of May 2015)
-# Available from: http://www.bls.gov/oes/special.requests/oesm15all.zip
-# Cleaned up manually for csv
-salaries <- read_csv("teachers_salary.csv")
 
-# BLS codes for Preschool, Primary, and Secondary Teachers (not postsecondary)
-teacher_occ_codes<-c(252021, 252022, 252031)
+getBLSData <- function(year="2015") {
+    
+    #create folder for data
+    if (!file.exists("BLSdata")) {
+        dir.create("BLSdata")
+    }
+    setwd("./BLSdata/")
+    
+    year_abb <- str_sub(year, start = -2)
+    
+    file <- paste0("oesm", year_abb, "all/all_data_M_",year,".xlsx")
+    
+    if (!file.exists(file)) {
+        
+        # Download data from the following site:
+        # http://www.bls.gov/oes/tables.htm
+        fileUrl <- paste0("http://www.bls.gov/oes/special.requests/oesm",year_abb,"all.zip")
+        excel_file <- paste0("all_data_M_",year,".xlsx")
+        download.file(fileUrl, excel_file)
+        unzip(excel_file)
+        file.remove(excel_file)
+        #store the date of retrieval
+        dateDownloaded <- Sys.Date()
+    }
+    
+    # Set wd back to main folder
+    setwd("../")
+}
 
-salaries$`occ code`<-str_replace_all(salaries$`occ code`,"-","")
-salaries$`occ code`<-as.numeric(salaries$`occ code`)
+if(!file.exists("./BLSdata/current_teachers_salaries.csv")) {
+    
+    # Call get Data function
+    getBLSData("2015")
+    
+    #Clean 2015 data
+    year = 2015
+    year_abb <- str_sub(year, start = -2)
+        
+    csv_file <- paste0("oesm", year_abb, "all/all_data_M_",year,".csv")
+        
+    if (!file.exists(csv_file)) {
+        stop(paste0("Open ",file," manually and save 1st sheet as csv to continue."), call. = FALSE)
+    }
+    
+    data <- read_csv(csv_file)
+    data <- data[,c(1:5,7:8,10,25)]
+    
+    # BLS codes for Preschool, Primary, and Secondary Teachers (not postsecondary)
+    teacher_occ_codes<-c(252021, 252022, 252031)
+    
+    data$`occ code`<-str_replace_all(data$`occ code`,"-","")
+    data$`occ code`<-as.numeric(data$`occ code`)
+    
+    # Filter for teachers
+    data <- filter(data,`occ code` %in% teacher_occ_codes, a_median != "*")
+    
+    # Replace NA of tot_emp to allow for weighted averages
+    data$tot_emp[is.na(data$tot_emp)]<-1
+    
+    write_csv(data, "current_teachers_salaries.csv")
+}
 
-# Filter for teachers
-salaries <- filter(salaries,`occ code` %in% teacher_occ_codes)
+salaries <- read_csv("./BLSdata/current_teachers_salaries.csv")
+
+if(!file.exists("./BLSdata/prev_teachers_salaries.csv")) {
+    
+    getBLSData("2012")
+    
+    #Clean 2012 data
+    year = 2012
+    year_abb <- str_sub(year, start = -2)
+    
+    csv_file <- paste0("all_oes_data_",year,".csv")
+    
+    if (!file.exists(csv_file)) {
+        stop(paste0("Open ",file," manually and save 1st sheet as csv to continue."), call. = FALSE)
+    }
+    
+    data <- read_csv(csv_file)
+    data <- data[,c(1:5,7:8,10,25)]
+    
+    # BLS codes for Preschool, Primary, and Secondary Teachers (not postsecondary)
+    teacher_occ_codes<-c(252021, 252022, 252031)
+    
+    data$occ_code <-str_replace_all(data$occ_code,"-","")
+    data$occ_code <-as.numeric(data$occ_code)
+    
+    # Filter for teachers
+    data <- filter(data, occ_code %in% teacher_occ_codes, a_median != "*")
+    
+    # Replace NA of tot_emp to allow for weighted averages
+    data$tot_emp[is.na(data$tot_emp)]<-1
+    
+    write_csv(data, "prev_teachers_salaries.csv")
+
+}
+
+prev_salaries <- read_csv("./BLSdata/prev_teachers_salaries.csv")
 
 # Gather BLS state_code
 state_code <- bls_areas$area_code[bls_areas$areatype_code=="S" &
-                        bls_areas$area_name==state_full]
+                                      bls_areas$area_name==state_full]
+# Area def available from:
+# http://www.bls.gov/oes/2015/may/area_definitions_m2015.xls
 
 # BLS Metro-county mapping
 bls_area_def <- read_csv("~/Google Drive/PRTeam Analysis/Geo Setup/bls_area_definitions_m2015.csv")
@@ -74,8 +163,17 @@ bls_area_def <- read_csv("~/Google Drive/PRTeam Analysis/Geo Setup/bls_area_defi
 cn <- gsub(" ", "_", colnames(bls_area_def))
 colnames(bls_area_def)<- sapply(cn, tolower)
 
+# Area def available from:
+# http://www.bls.gov/oes/2012/may/area_definitions_m2012.xls
+prev_bls_area_def <- read_csv("~/Google Drive/PRTeam Analysis/Geo Setup/bls_area_definitions_m2012.csv")
+
+# Clean up column names
+cn <- gsub(" ", "_", colnames(prev_bls_area_def))
+colnames(prev_bls_area_def)<- sapply(cn, tolower)
+
 # Function to subset BLS data by state
 state_filter <- function(state_abb = "CA") {
+    
     state_full <- as.vector(state_match$state.name[state.abb==state_abb])
     
     # Calculated weighted mean for salary & Subset for state
@@ -89,25 +187,54 @@ state_filter <- function(state_abb = "CA") {
         summarise(area = state_code, area_title = state_full, 
                   teacher_salary = weighted.mean(a_median, tot_emp, na.rm = T))
     
+    prev_state_salaries <- prev_salaries %>%
+        dplyr::group_by(area, area_title) %>%
+        summarise(prev_teacher_salary = weighted.mean(a_median, tot_emp, na.rm = T)) %>%
+        dplyr::filter(grepl(paste0(state_abb,"|", state_full," nonmetropolitan"), area_title, ignore.case = F))
+    
+    prev_state_median_salary <- prev_salaries %>%
+        filter(grepl(paste0(state_abb,"|", state_full," nonmetropolitan"), area_title, ignore.case = F)) %>%
+        summarise(area = state_code, area_title = state_full, 
+                  prev_teacher_salary = weighted.mean(a_median, tot_emp, na.rm = T))
+    
+    
     bls_area_def <- bls_area_def %>% 
         filter(state == state_full) %>% 
         dplyr::select(-township_code, -msa_code_for_msas_with_divisions, -msa_name_for_msas_with_divisions)
+    
+    prev_bls_area_def <- prev_bls_area_def %>% 
+        filter(state == state_full) %>% 
+        dplyr::select(-township_code, -township_name, -aggregate_msa_code, -aggregate_msa_name)
+    
 
+    
     state_salaries_merged <- merge(state_salaries, bls_area_def, by.x = "area", by.y = "msa_code_(including_msa_divisions)", all.y = T)
     
-    state_salaries_merged <- merge(state_salaries_merged, state_median_salary, all = T)
+    
+    prev_state_salaries_merged <- merge(prev_state_salaries, prev_bls_area_def, by.x = "area", by.y = "msa_code_(with_divisions)", all.y = T)
+    
+    prev_state_salaries_merged <- merge(prev_state_salaries_merged, prev_state_median_salary, all = T)
+    
+    state_salaries_merged <- merge(state_salaries_merged, prev_state_salaries_merged[,c(3,7)])
+    
+    state_median_salary_m <- merge(state_median_salary, prev_state_median_salary)
+    
+    state_salaries_merged <- merge(state_salaries_merged, state_median_salary_m, all = T)
+    
+    state_salaries_merged <- state_salaries_merged %>%
+        mutate(teacher_salary_pct_change = teacher_salary/prev_teacher_salary - 1)
+    
+    # clean names        
+    colnames(state_salaries_merged)[10]<-"county_name"
+    
+    state_salaries_merged <- state_salaries_merged %>%
+        dplyr::select(area_title, county_name, county_code, teacher_salary, prev_teacher_salary, teacher_salary_pct_change)
+    
     return(state_salaries_merged)
 }
 
 # Call Function
 state_salaries_merged <- state_filter(state_abb)
-
-# clean names
-colnames(state_salaries_merged)[9]<-"county_name"
-
-# Remove uneeded large objects
-rm(salaries)
-rm(bls_area_def)
 
 # Set interest rate
 interest_rate = 0.035
@@ -115,16 +242,11 @@ interest_rate = 0.035
 # Calculate max monthly payment and max home price 
 # using 30 percent affordability criteria
 state_salaries_merged <- state_salaries_merged %>%
-    dplyr::select(area_title, county_name, county_code, teacher_salary) %>%
-    mutate(max_payment = round((teacher_salary / 12) * 0.3 / 25) * 25, 
-           max_home_price = round(
-               ((teacher_salary / 12) * 0.3 - 500) /
-                    ( (interest_rate/12) + (interest_rate/12) /
-                        (
-                          (1 + (interest_rate/12))^(30*12)
-                             -1)) /
-                   10000) * 10000
-           )
+    mutate(max_payment = round((teacher_salary / 12) * 0.3 / 25) * 25,
+           prev_max_payment = round((prev_teacher_salary / 12) * 0.3 / 25) * 25,
+           max_home_price = round(((teacher_salary / 12) * 0.3 - 500)/( (interest_rate/12) + (interest_rate/12) /((1 + (interest_rate/12))^(30*12)-1))/10000) * 10000,
+           prev_max_home_price = round(((prev_teacher_salary / 12) * 0.3 - 500)/( (interest_rate/12) + (interest_rate/12) /((1 + (interest_rate/12))^(30*12)-1))/10000) * 10000
+)
 
 ##Redfin Specific Data##
 # Gather Redfin's active MLS data
@@ -137,45 +259,90 @@ get_active_listings <- function(state_abb = "CA") {
             # Load in credentials and JDBC connection
             source("~/Google Drive/PRTeam Analysis/R Scripts/Connecting to Redfin db in R.R")
         )
+    }
+    q <- paste0("select listing_id, 
+                l.county_id, 
+                c.display_name,
+                coalesce(list_price, original_price) as list_price, 
+                hoa_dues, 
+                coalesce(case when t.taxes_due_properties is not null and t.taxable_value_total_properties is not null then t.taxes_due_properties/t.taxable_value_total_properties end, 0.01125) as prop_tax_rate,
+                pt.name,
+                num_bedrooms, 
+                num_bathrooms, 
+                approx_sq_ft,
+                'http://www.redfin.com/'::text || upper(l.state_code)::text || '/'::text || regexp_replace(initcap(trim(l.city)), ' ', '-')::text || '/home/'::text || l.property_id::text as url
+                from listings l
+                left join rf_temp.dqv3_tax t on t.property_id=l.property_id
+                join counties c on c.county_id=l.county_id
+                join property_types pt on pt.property_type_id=l.property_type_id
+                where listing_type_id = 1
+                and search_status_id = 1
+                and is_short_sale = 0
+                and is_bank_owned = 0
+                and l.property_type_id in (3,6,13)
+                and coalesce(listing_date::date, listing_added_date::date) <= current_date-1
+                and coalesce(listing_date::date, listing_added_date::date) > current_date-366
+                and coalesce(off_market_date, sale_date) is null
+                and l.county_id is not null
+                and coalesce(list_price, original_price) >= 10000
+                and state_code = '",state_abb,"'
+                order by list_price desc;"
+    )
+    message(paste0("Getting listings for ",state_abb))
+    
+    listings <- dbGetQuery(rscon, statement = q)
+    
+    return(listings)
 }
-        q <- paste0("select listing_id, 
-                    l.county_id, 
-                    c.display_name,
-                    coalesce(list_price, original_price) as list_price, 
-                    hoa_dues, 
-                    t.taxes_due_properties/t.taxable_value_total_properties as prop_tax_rate,
-                    pt.name,
-                    num_bedrooms, 
-                    num_bathrooms, 
-                    approx_sq_ft,
-                    'http://www.redfin.com/'::text || upper(l.state_code)::text || '/'::text || regexp_replace(initcap(trim(l.city)), ' ', '-')::text || '/home/'::text || l.property_id::text as url
-                    from listings l
-                    join rf_temp.dqv3_tax t on t.property_id=l.property_id
-                    join counties c on c.county_id=l.county_id
-                    join property_types pt on pt.property_type_id=l.property_type_id
-                    where listing_type_id = 1
-                    and search_status_id = 1
-                    and is_short_sale = 0
-                    and is_bank_owned = 0
-                    and l.property_type_id in (3,6,13)
-                    and t.taxes_due_properties is not null
-                    and t.taxable_value_total_properties is not null
-                    and coalesce(listing_date::date, listing_added_date::date) <= current_date-1
-                    and coalesce(listing_date::date, listing_added_date::date) > current_date-366
-                    and coalesce(off_market_date, sale_date) is null
-                    and l.county_id is not null
-                    and coalesce(list_price, original_price) >= 10000
-                    and state_code = '",state_abb,"'
-                    order by list_price desc;"
-        )
-        message(paste0("Getting listings for ",state_abb))
-        
-        listings <- dbGetQuery(rscon, statement = q)
-        
-        return(listings)
-}
+
 # Call function
 listings <- get_active_listings(state_abb)
+
+get_prev_listings <- function(state_abb = "CA") {
+    if(!(exists("rscon"))){
+        message("Loading database connections")
+        suppressPackageStartupMessages(
+            # Load in credentials and JDBC connection
+            source("~/Google Drive/PRTeam Analysis/R Scripts/Connecting to Redfin db in R.R")
+        )
+    }
+    q <- paste0("select listing_id, 
+                l.county_id, 
+                c.display_name,
+                coalesce(list_price, original_price) as list_price, 
+                hoa_dues, 
+                coalesce(case when t.taxes_due_properties is not null and t.taxable_value_total_properties is not null then t.taxes_due_properties/t.taxable_value_total_properties end, 0.01125) as prop_tax_rate,
+                pt.name,
+                num_bedrooms, 
+                num_bathrooms, 
+                approx_sq_ft,
+                'http://www.redfin.com/'::text || upper(l.state_code)::text || '/'::text || regexp_replace(initcap(trim(l.city)), ' ', '-')::text || '/home/'::text || l.property_id::text as url
+                from listings l
+                left join rf_temp.dqv3_tax t on t.property_id=l.property_id
+                join counties c on c.county_id=l.county_id
+                join property_types pt on pt.property_type_id=l.property_type_id
+                where listing_type_id = 1
+                --and search_status_id = 1
+                and is_short_sale = 0
+                and is_bank_owned = 0
+                and l.property_type_id in (3,6,13)
+                and coalesce(listing_date::date, listing_added_date::date) <= current_date-1462
+                and coalesce(listing_date::date, listing_added_date::date) > current_date-1827
+                and coalesce(off_market_date::date, sale_date::date, current_date) >= current_date-1462
+                and l.county_id is not null
+                and coalesce(list_price, original_price) >= 10000
+                and state_code = '",state_abb,"'
+                order by list_price desc;"
+    )
+    message(paste0("Getting previous listings for ",state_abb))
+    
+    listings <- dbGetQuery(rscon, statement = q)
+    
+    return(listings)
+}
+
+# Call function
+prev_listings <- get_prev_listings(state_abb)
 
 # Function to estimate monthly mortgage payments
 monthly_mortgage_calculator <- function(home_price, 
@@ -214,18 +381,34 @@ monthly_mortgage_calculator <- function(home_price,
 
 # Call function to calculate mortgage payments
 listings$monthly_mortgage <- as.vector(
-        unlist(
-            pmap(
-                list(
-                     home_price = listings$list_price, 
-                     hoa_dues = listings$hoa_dues, #hoa dues by listing
-                     ann_property_taxes = listings$prop_tax_rate, #using tax rate by county
-                     interest_rate = .035, #Use current interest rates
-                     down_payment = .1), #10% down payment assumption
+    unlist(
+        pmap(
+            list(
+                home_price = listings$list_price, 
+                hoa_dues = listings$hoa_dues, #hoa dues by listing
+                ann_property_taxes = listings$prop_tax_rate, #using tax rate by county
+                interest_rate = .035, #Use current interest rates
+                down_payment = .1), #10% down payment assumption
+            monthly_mortgage_calculator)))
+
+# Call function to calculate mortgage payments
+prev_listings$monthly_mortgage <- as.vector(
+    unlist(
+        pmap(
+            list(
+                home_price = prev_listings$list_price, 
+                hoa_dues = prev_listings$hoa_dues, #hoa dues by listing
+                ann_property_taxes = prev_listings$prop_tax_rate, #using tax rate by county
+                interest_rate = .035, #Use current interest rates
+                down_payment = .1), #10% down payment assumption
             monthly_mortgage_calculator)))
 
 # Join salary data, removing rows without county_names
 listings <- merge(listings, state_salaries_merged, by.x = "display_name", by.y = "county_name")
+
+# Join salary data, removing rows without county_names
+prev_listings <- merge(prev_listings, state_salaries_merged, by.x = "display_name", by.y = "county_name")
+
 
 # Calculate percent affordable by county
 (county_affordability <- listings %>%
@@ -255,6 +438,44 @@ state_max_payment <- state_salaries_merged$max_payment[
 
 state_affordability$area_title <- state_full
 
+# Calculate percent affordable previously by county
+(prev_county_affordability <- prev_listings %>%
+    group_by(display_name) %>%
+    mutate(n_listings = n()) %>%
+    summarise(affordable_listings = sum(
+        if_else(
+            monthly_mortgage <= prev_max_payment,1,0)),
+        total_listings = median(n_listings,na.rm=T),
+        prev_percent_affordable = affordable_listings/total_listings) %>%
+    arrange(prev_percent_affordable))
+
+# Get max payment at the state level
+prev_state_max_payment <- state_salaries_merged$prev_max_payment[
+    state_salaries_merged$area_title==state_full & 
+        !(is.na(state_salaries_merged$area_title))]
+
+# Calculate percent of listings affordable for the entire state
+(prev_state_affordability <- prev_listings %>%
+    mutate(n_listings = n()) %>%
+    summarise(affordable_listings = sum(
+        if_else(
+            monthly_mortgage <= prev_state_max_payment,1,0)),
+        total_listings = median(n_listings,na.rm=T),
+        prev_percent_affordable = affordable_listings/total_listings) %>%
+    arrange(prev_percent_affordable))
+
+prev_state_affordability$area_title <- state_full
+
+prev_county_affordability$affordable_listings[
+    is.na(prev_county_affordability$affordable_listings) 
+    & !is.na(prev_county_affordability$total_listings)]<-0
+
+prev_county_affordability$prev_percent_affordable[
+    is.na(prev_county_affordability$prev_percent_affordable) 
+    & !is.na(prev_county_affordability$total_listings)]<-0
+
+county_affordability <- merge(county_affordability, prev_county_affordability[,c(1,4)], all=T)
+
 # Join salary data to affordability numbers
 state_salaries_merged <- merge(state_salaries_merged, county_affordability, by.x = "county_name", by.y = "display_name", all = T)
 
@@ -270,18 +491,23 @@ state_salaries_merged$percent_affordable[
 # Fill in state level data
 state_salaries_merged$affordable_listings[
     state_salaries_merged$area_title==state_full]<-
-        state_affordability$affordable_listings[
-            state_affordability$area_title==state_full]
+    state_affordability$affordable_listings[
+        state_affordability$area_title==state_full]
 
 state_salaries_merged$total_listings[
     state_salaries_merged$area_title==state_full]<-
-        state_affordability$total_listings[
-            state_affordability$area_title==state_full]
+    state_affordability$total_listings[
+        state_affordability$area_title==state_full]
 
 state_salaries_merged$percent_affordable[
     state_salaries_merged$area_title==state_full]<-
-        state_affordability$percent_affordable[
-            state_affordability$area_title==state_full]
+    state_affordability$percent_affordable[
+        state_affordability$area_title==state_full]
+
+state_salaries_merged$prev_percent_affordable[
+    state_salaries_merged$area_title==state_full]<-
+    prev_state_affordability$prev_percent_affordable[
+        prev_state_affordability$area_title==state_full]
 
 
 state_salaries_merged<- state_salaries_merged %>%
@@ -343,12 +569,13 @@ tbl <- affordable_listing_examples %>%
 
 # Segment out unaffordable counties
 unaffordable_counties <- state_salaries_merged[state_salaries_merged$affordable_listings==0 
-                                          & !(is.na(state_salaries_merged$affordable_listings)),]
+                                               & !(is.na(state_salaries_merged$affordable_listings)),]
 
 # Lookup county_ids
-county_ids <- unique(listings[listings$display_name %in% unaffordable_counties$county_name,1:2])
+county_ids <- unique(listings[listings$display_name %in% unaffordable_counties$county_name,c(1,3)])
+
 # Join in county_ids
-unaffordable_counties <- merge(unaffordable_counties,county_ids, by.x="county_name", by.y="display_name", all=T)
+unaffordable_counties <- merge(unaffordable_counties, county_ids, by.x="county_name", by.y="display_name", all=T)
 
 for(u in seq_along(unaffordable_counties$county_name)){
     tbl0<-cbind.data.frame(
@@ -377,7 +604,7 @@ tbl$display_name<-str_replace(tbl$display_name, " County","")
 
 # Separate state-level data to add to table
 state_affordable <- state_salaries_merged[state_salaries_merged$area_title==state_full 
-                                         & !(is.na(state_salaries_merged$area_title)),]
+                                          & !(is.na(state_salaries_merged$area_title)),]
 
 tbl2<-cbind.data.frame(
     display_name=as.character(state_affordable$area_title[1]),
@@ -388,7 +615,7 @@ tbl2<-cbind.data.frame(
     description=as.character("View more on Redfin.com"),
     county_id=NA, 
     stringsAsFactors = F
-    )
+)
 
 tbl2<-group_by(tbl2,display_name)
 
@@ -416,19 +643,19 @@ html <- "
 # loop through each county writing HTML code with examples
 for (i in 1:nrow(tbl)) {
     html <- paste0(html, "
-                 <tr class=''>
-                 <td style='text-align: left' class='c0 '>",
+                   <tr class=''>
+                   <td style='text-align: left' class='c0 '>",
                    ifelse(!is.na(tbl[i, 7, with = FALSE]),
-        paste0("<a href=https://www.redfin.com/county/", tbl[i, 7, with = FALSE], "/?utm_source=blog&utm_medium=post&utm_content=real_estate&utm_campaign=1002170'>", tbl[i, 1, with = FALSE], "</a></td>"
-               ),
-        paste0("<b>",tbl[i, 1, with = FALSE],"</b></td>")
-    ),"<td style='text-align: right' class='c1 '>", paste0("$", prettyNum(100*round(tbl[i, 2, with = FALSE]/100), big.mark = ",", scientific = FALSE)), "</td>
+                          paste0("<a href=https://www.redfin.com/county/", tbl[i, 7, with = FALSE], "/?utm_source=blog&utm_medium=post&utm_content=real_estate&utm_campaign=1002170'>", tbl[i, 1, with = FALSE], "</a></td>"
+                          ),
+                          paste0("<b>",tbl[i, 1, with = FALSE],"</b></td>")
+                   ),"<td style='text-align: right' class='c1 '>", paste0("$", prettyNum(100*round(tbl[i, 2, with = FALSE]/100), big.mark = ",", scientific = FALSE)), "</td>
                  <td style='text-align: right' class='c2 '>", paste0("$", prettyNum(tbl[i, 4, with = FALSE], big.mark = ",", scientific = FALSE)), "</td>
-                 <td style='text-align: right' class='c3 '>",
-                    ifelse(!is.na(tbl[i, 5, with = FALSE]),
-                           paste0("<a href=", tbl[i, 5, with = FALSE], "?utm_source=blog&utm_medium=post&utm_content=real_estate&utm_campaign=1002170'>", tbl[i, 6, with = FALSE], "</a></td></tr>"),
-                           paste0(tbl[i, 6, with = FALSE], "</td></tr>")
-                           )
+                   <td style='text-align: right' class='c3 '>",
+                   ifelse(!is.na(tbl[i, 5, with = FALSE]),
+                          paste0("<a href=", tbl[i, 5, with = FALSE], "?utm_source=blog&utm_medium=post&utm_content=real_estate&utm_campaign=1002170'>", tbl[i, 6, with = FALSE], "</a></td></tr>"),
+                          paste0(tbl[i, 6, with = FALSE], "</td></tr>")
+                   )
     )
 }
 
@@ -454,8 +681,9 @@ state_salaries_geo <- geo_join(counties, state_salaries_merged, "COUNTYFP", "cou
 # Make tooltip popup for map
 popup <- paste0("County: <b>", state_salaries_geo$NAME, "</b><br>", 
                 "Average Salary for Teachers: <b>", scales::dollar(round(state_salaries_geo$teacher_salary/1000,1)*1000), 
-                "</b><br>Percent of listings affordable: <b>", scales::percent(round(state_salaries_geo$percent_affordable, 3)), "</b>"
-                )
+                "</b><br>Percent of listings affordable: <b>", scales::percent(round(state_salaries_geo$percent_affordable, 3)), "</b>",
+                "<br>Percent of listings affordable in 2012: <b>", scales::percent(round(state_salaries_geo$prev_percent_affordable, 3)), "</b>"
+)
 
 # Create color scale for heatmap
 pal <- colorBin(
@@ -475,15 +703,15 @@ state_salaries_map <-leaflet() %>%
                 weight = 1, 
                 smoothFactor = 0.2,
                 popup = popup
-                ) %>%
+    ) %>%
     addLegend(pal = pal, 
               values = state_salaries_geo$percent_affordable*100, 
               position = "bottomleft", 
               title = "Percentage affordable",
               na.label = "No data",
               labFormat = labelFormat(suffix = "%",
-                    transform = function(x) 100 * x)
-              ) %>%
+                                      transform = function(x) 100 * x)
+    ) %>%
     setMaxBounds(state_salaries_geo@bbox[1], # removing paning the globe 
                  state_salaries_geo@bbox[2], # as data may become removed
                  state_salaries_geo@bbox[3], 
