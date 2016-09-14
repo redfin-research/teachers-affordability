@@ -98,7 +98,7 @@ if(!file.exists("./BLSdata/current_teachers_salaries.csv")) {
     data <- read_csv(csv_file)
     data <- data[,c(1:5,7:8,10,25)]
     
-    # BLS codes for Preschool, Primary, and Secondary Teachers (not postsecondary)
+    # BLS codes for Elementary, Middle, and Secondary Teachers (not postsecondary)
     teacher_occ_codes<-c(252021, 252022, 252031)
     
     data$`occ code`<-str_replace_all(data$`occ code`,"-","")
